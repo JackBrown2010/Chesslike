@@ -18,11 +18,17 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.13.4/chess.min.js"></script>
 <script>
 const boardDiv = document.getElementById('board');
-const game = new Chess();
+let game;
+try {
+  game = new Chess();
+} catch(e) {
+  console.error("Chess.js failed to load", e);
+}
 let selectedSquare = null;
 let aiThinking = false;
 
 function renderBoard() {
+  if (!game) return;
   boardDiv.innerHTML = '';
   const board = game.board();
   for (let r = 7; r >= 0; r--) {
@@ -40,10 +46,10 @@ function renderBoard() {
           'q': piece.color === 'w' ? '♕' : '♛',
           'k': piece.color === 'w' ? '♔' : '♚'
         };
-        squareDiv.textContent = symbolMap[piece.type];
+        squareDiv.textContent = symbolMap[piece.type] || '';
       }
       const file = 'abcdefgh'[c];
-      const rank = (r+1).toString();
+      const rank = (r + 1).toString();
       const squareName = file + rank;
       squareDiv.addEventListener('click', () => onSquareClick(squareName));
       if (selectedSquare === squareName) squareDiv.classList.add('selected');
@@ -53,7 +59,7 @@ function renderBoard() {
 }
 
 function onSquareClick(square) {
-  if (aiThinking) return;
+  if (aiThinking || !game) return;
   if (!selectedSquare) {
     const moves = game.moves({ square, verbose: true });
     if (moves.length > 0) {
@@ -78,7 +84,7 @@ function aiMove() {
     }
     aiThinking = false;
     renderBoard();
-  }, 300);
+  }, 200);
 }
 
 renderBoard();
