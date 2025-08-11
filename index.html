@@ -1,250 +1,111 @@
-<!doctype html>
-<html lang="en">
+<!DOCTYPE html>
+<html>
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Roguelike Chess — Web</title>
-  <style>
-    :root{--bg:#0b1220;--panel:#0f1724;--light:#e6eef8;--accent:#7dd3fc}
-    body{margin:0;font-family:Inter,Segoe UI,Roboto,Arial,sans-serif;background:linear-gradient(180deg,#07101a 0%,#081827 100%);color:var(--light);display:flex;align-items:flex-start;justify-content:center;min-height:100vh;padding:24px}
-    .app{display:grid;grid-template-columns:420px 360px;gap:20px}
-    .card{background:linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));border-radius:12px;padding:16px;box-shadow:0 6px 30px rgba(2,6,23,0.6);}
-    h1{margin:0 0 8px;font-size:18px}
-
-    /* board layout */
-    #board{width:420px;display:grid;grid-template-columns:repeat(8,1fr);grid-auto-rows:1fr;border-radius:8px;overflow:hidden;border:1px solid rgba(255,255,255,0.03)}
-    .sq{display:flex;align-items:center;justify-content:center;font-size:34px;cursor:pointer;user-select:none;aspect-ratio:1/1}
-    .light{background:#f0d9b5;color:#111}
-    .dark{background:#b58863;color:#111}
-    .sq.selected{outline:3px solid var(--accent);box-shadow:0 0 18px rgba(125,211,252,0.12)}
-    .sq .piece{font-size:34px;line-height:1}
-    .piece.white{color:#fff;text-shadow:0 1px 0 rgba(0,0,0,0.6)}
-    .piece.black{color:#000;text-shadow:0 1px 0 rgba(255,255,255,0.2)}
-
-    .controls{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
-    button{background:transparent;border:1px solid rgba(255,255,255,0.06);color:var(--light);padding:8px 10px;border-radius:8px;cursor:pointer}
-    .small{font-size:12px;padding:6px 8px}
-    .panel{width:360px}
-    .log{height:200px;overflow:auto;background:rgba(255,255,255,0.02);padding:8px;border-radius:8px;margin-top:8px}
-    .upgrades{margin-top:12px}
-    .upgrade-badge{display:inline-block;background:#142231;padding:6px 8px;border-radius:8px;margin:6px 6px 0 0;border:1px solid rgba(125,211,252,0.06)}
-    .status{margin-top:8px;color:#9fb4c8}
-    footer{margin-top:12px;font-size:12px;color:#8fa6b8}
-  </style>
+<title>Roguelike Chess Web</title>
+<meta charset="UTF-8">
+<style>
+  body { font-family: sans-serif; display: flex; flex-direction: column; align-items: center; }
+  #board { display: grid; grid-template-columns: repeat(8, 60px); grid-template-rows: repeat(8, 60px); border: 2px solid black; }
+  .square { width: 60px; height: 60px; display: flex; align-items: center; justify-content: center; font-size: 40px; }
+  .light { background: #f0d9b5; }
+  .dark { background: #b58863; }
+  .highlight { outline: 3px solid yellow; }
+  #log { margin-top: 10px; width: 480px; height: 100px; overflow-y: auto; border: 1px solid black; padding: 5px; }
+</style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.13.4/chess.min.js"></script>
 </head>
 <body>
-  <div class="app">
-    <div class="card">
-      <h1>Roguelike Chess — Player vs Strong Engine</h1>
-      <div id="board" aria-label="chess board"></div>
-
-      <div class="controls">
-        <button id="undo" class="small">Undo</button>
-        <button id="newGame" class="small">New Game</button>
-        <button id="flip" class="small">Flip Board</button>
-        <button id="listExtras" class="small">List Special Moves</button>
-      </div>
-
-      <div class="status" id="status">White to move — you play White</div>
-
-      <div class="log" id="log"></div>
-    </div>
-
-    <div class="card panel">
-      <h1>Upgrades (player only)</h1>
-      <div class="upgrades" id="upgrades"></div>
-
-      <h1 style="margin-top:16px">Engine controls</h1>
-      <div style="display:flex;gap:8px;align-items:center">
-        <label>AI depth</label>
-        <input id="aiDepth" type="number" value="3" style="width:56px;background:transparent;color:var(--light);border:1px solid rgba(255,255,255,0.06);padding:6px;border-radius:6px" />
-      </div>
-
-      <h1 style="margin-top:16px">How it works</h1>
-      <ul style="color:#9fb4c8">
-        <li>Capture a piece → gain 1 random upgrade that applies to all your pieces of that type.</li>
-        <li>Upgrades include KnightLeap, ExtraMove, Fortify, Teleport, PromoteOnCapture.</li>
-        <li>AI plays standard chess (no upgrades) with alpha-beta search.</li>
-      </ul>
-
-      <footer>
-        To deploy on GitHub: push this file as <code>index.html</code> into a repo and enable GitHub Pages (main branch / root). Or just open locally.
-      </footer>
-    </div>
-  </div>
-
+<h1>Roguelike Chess</h1>
+<div id="board"></div>
+<div id="log"></div>
 <script>
-// Roguelike Chess Web — fixed coordinate mappings, square sizing, piece visibility, and move handling.
-// This version fixes the issues you reported: pieces should be clickable/movable, squares are square-sized,
-// white vs black pieces use distinct Unicode glyphs, and initial positions are correct.
+const boardDiv = document.getElementById('board');
+const logDiv = document.getElementById('log');
+const game = new Chess();
+let selectedSquare = null;
+let upgrades = {};
+let aiDepth = 2;
 
-(function(){
-  const UNICODE_WHITE = { p:'♙', r:'♖', n:'♘', b:'♗', q:'♕', k:'♔' };
-  const UNICODE_BLACK = { p:'♟', r:'♜', n:'♞', b:'♝', q:'♛', k:'♚' };
-  const FILES = 'abcdefgh';
+const pieceIcons = {
+  'p': '♟', 'r': '♜', 'n': '♞', 'b': '♝', 'q': '♛', 'k': '♚',
+  'P': '♙', 'R': '♖', 'N': '♘', 'B': '♗', 'Q': '♕', 'K': '♔'
+};
 
-  // Attempt to load chess.js from CDN; fallback to minimal MiniChess if unavailable
-  let ChessLib = null; let game = null;
-  function loadChessJs(cb){
-    const script = document.createElement('script');
-    script.src = 'https://cdnjs.cloudflare.com/ajax/libs/chess.js/1.0.0/chess.min.js';
-    script.onload = ()=>{ ChessLib = window.Chess; cb(); };
-    script.onerror = ()=>{ console.warn('Could not load chess.js — using fallback.'); ChessLib = null; cb(); };
-    document.head.appendChild(script);
-    setTimeout(()=>{ if(!ChessLib) cb(); }, 1200);
-  }
+function log(msg) {
+  logDiv.innerHTML += msg + '<br>';
+  logDiv.scrollTop = logDiv.scrollHeight;
+}
 
-  // Roguelike state
-  const UPGRADE_POOL = [ ['KnightLeap','Piece gains knight moves in addition to normal moves.'], ['ExtraMove','This piece gets a one-time extra move after moving.'], ['Fortify','Pieces of this type get +0.5 material bonus in evaluation.'], ['Teleport','This piece can teleport once to any empty square.'], ['PromoteOnCapture','When this piece captures, it auto-promotes to Queen.'] ];
-  const upgradesByType = { p:[], n:[], b:[], r:[], q:[], k:[] };
-  const perPieceCharges = {}; // 'e4' -> Set
-  const fortifyBonus = { p:0, n:0, b:0, r:0, q:0, k:0 };
-
-  // DOM
-  const boardEl = document.getElementById('board');
-  const logEl = document.getElementById('log');
-  const statusEl = document.getElementById('status');
-  const upgradesEl = document.getElementById('upgrades');
-  const aiDepthEl = document.getElementById('aiDepth');
-
-  let flipped = false; let selectedSquare = null; let legalMovesCache = [];
-
-  function init(){
-    loadChessJs(()=>{ startNewGame(); attachUI(); });
-  }
-
-  function attachUI(){
-    document.getElementById('newGame').addEventListener('click', ()=>startNewGame());
-    document.getElementById('flip').addEventListener('click', ()=>{ flipped=!flipped; renderBoard(); });
-    document.getElementById('undo').addEventListener('click', ()=>{ if(game.undo){ game.undo(); renderBoard(); updateStatus(); log('Undid move'); } });
-    document.getElementById('listExtras').addEventListener('click', ()=>{ listExtras(); });
-  }
-
-  function startNewGame(){
-    // reset upgrades
-    for(const k in upgradesByType) upgradesByType[k]=[];
-    for(const k in perPieceCharges) delete perPieceCharges[k];
-    for(const k in fortifyBonus) fortifyBonus[k]=0;
-
-    if(ChessLib){ game = new ChessLib(); }
-    else { game = new MiniChess(); }
-    selectedSquare=null; legalMovesCache=[]; renderBoard(); updateStatus(); log('New game — you are White.'); renderUpgrades();
-  }
-
-  // Coordinate helpers (consistent with chess.js board() array where board[0] is rank 8)
-  function coordsFromSquare(sq){ const file = FILES.indexOf(sq[0]); const rank = parseInt(sq[1],10); const row = 8 - rank; return [file, row]; }
-  function squareFromCoords(file,row){ const rank = 8 - row; return FILES[file] + String(rank); }
-
-  function pieceAt(sq){ const [f,r] = coordsFromSquare(sq); const b = game.board(); return b[r][f]; }
-
-  function renderBoard(){ boardEl.innerHTML=''; const b = game.board(); // b[row][file] with row 0 = rank8
-    // Determine order (top-left should be a8 when not flipped)
-    const rows = [...Array(8).keys()]; const files = [...Array(8).keys()];
-    const rowOrder = flipped ? rows.slice().reverse() : rows;
-    const fileOrder = flipped ? files.slice().reverse() : files;
-    for(const r of rowOrder){ for(const f of fileOrder){ const sqName = squareFromCoords(f,r); const sq = document.createElement('div'); sq.className = 'sq '+(((f + r)&1)?'dark':'light'); sq.dataset.sq = sqName; const cell = b[r][f]; if(cell){ const span = document.createElement('span'); span.className='piece '+(cell.color==='w'?'white':'black'); const glyph = cell.color==='w' ? UNICODE_WHITE[cell.type] : UNICODE_BLACK[cell.type]; span.textContent = glyph; sq.appendChild(span); } sq.addEventListener('click', onSquareClick); boardEl.appendChild(sq); } }
-    highlightLegal(); renderUpgrades();
-  }
-
-  function onSquareClick(e){ const sq = e.currentTarget.dataset.sq; const p = pieceAt(sq); if(!selectedSquare){ if(p && p.color==='w'){ selectedSquare = sq; computeLegalMoves(sq); highlightSelected(sq); } } else { if(selectedSquare === sq){ selectedSquare = null; legalMovesCache=[]; highlightSelected(null); return; } attemptMove(selectedSquare, sq); selectedSquare = null; highlightSelected(null); } }
-
-  function computeLegalMoves(from){ const moves = game.moves({square: from, verbose: true}); legalMovesCache = moves.map(m=>m.to); highlightLegal(); }
-
-  function highlightSelected(sq){ document.querySelectorAll('.sq').forEach(el=>el.classList.remove('selected')); if(sq){ const el = document.querySelector(`.sq[data-sq='${sq}']`); if(el) el.classList.add('selected'); } }
-  function highlightLegal(){ document.querySelectorAll('.sq').forEach(el=>el.style.boxShadow=''); for(const m of legalMovesCache){ const el = document.querySelector(`.sq[data-sq='${m}']`); if(el) el.style.boxShadow = 'inset 0 0 0 3px rgba(125,211,252,0.12)'; } }
-
-  function attemptMove(from,to){
-    const moves = game.moves({verbose:true});
-    const found = moves.find(m=>m.from===from && m.to===to);
-    if(found){
-      // if capture and player moved, grant upgrade
-      if(found.captured && game.turn()==='w'){
-        const capType = found.captured; const [upgradeId,desc] = rndChoice(UPGRADE_POOL);
-        upgradesByType[capType].push(upgradeId);
-        if(upgradeId==='Fortify') fortifyBonus[capType]+=50;
-        // per-piece charge will be granted to destination AFTER move
-        log(`Captured ${capType.toUpperCase()} → upgrade ${upgradeId}: ${desc}`);
-      }
-
-      // perform move
-      const mv = game.move({from: from, to: to, promotion: found.promotion || 'q'});
-      // grant per-piece charges (Teleport/ExtraMove) to destination square if applicable
-      if(found.captured){ const lastUpgrade = upgradesByType[found.captured].slice(-1)[0]; if(lastUpgrade && (lastUpgrade==='Teleport' || lastUpgrade==='ExtraMove')){ perPieceCharges[to] = perPieceCharges[to]||new Set(); perPieceCharges[to].add(lastUpgrade); } }
-
-      // PromoteOnCapture: if the moving piece's type (after move) has that upgrade and move was a capture, convert to queen
-      if(found.captured){ const destPiece = pieceAt(to); if(destPiece){ const typeKey = destPiece.type; if(upgradesByType[typeKey] && upgradesByType[typeKey].includes('PromoteOnCapture')){ // replace
-            putPieceAt(to, {type:'q', color: destPiece.color}); log(`Piece on ${to} auto-promoted to Queen due to PromoteOnCapture.`); }
-        }
-      }
-
-      renderBoard(); updateStatus();
-
-      // ExtraMove handling — prompt simple flow
-      if(perPieceCharges[to] && perPieceCharges[to].has('ExtraMove')){
-        const again = confirm('This moved piece has an ExtraMove charge. Move it again now?');
-        if(again){ const dest = prompt('Enter destination square for extra move (e.g. e4):'); if(dest){ const extras = generateExtraMovesForPiece(to); const legal = game.moves({verbose:true}).some(m=>m.from===to && m.to===dest); if(legal || extras.includes(dest)){ perPieceCharges[to].delete('ExtraMove'); if(perPieceCharges[to].size===0) delete perPieceCharges[to]; attemptMove(to,dest); return; } else alert('Not a legal extra move.'); } }
-      }
-
-      // after player move, let AI move
-      setTimeout(()=>{ if(!game.game_over && !game.game_over()) aiMove(); }, 120);
-
-    } else {
-      // maybe it's a generated extra move (KnightLeap or Teleport)
-      const extras = generateExtraMovesForPiece(from);
-      if(extras.includes(to)){
-        // perform pseudo-move
-        game.move({from:from,to:to,promotion:'q'});
-        if(perPieceCharges[from] && perPieceCharges[from].has('Teleport')){ perPieceCharges[from].delete('Teleport'); if(perPieceCharges[from].size===0) delete perPieceCharges[from]; }
-        renderBoard(); updateStatus(); setTimeout(()=>{ if(!game.game_over && !game.game_over()) aiMove(); }, 120);
-      } else { log('Illegal move.'); }
+function renderBoard() {
+  boardDiv.innerHTML = '';
+  const board = game.board();
+  for (let rank = 7; rank >= 0; rank--) {
+    for (let file = 0; file < 8; file++) {
+      const squareColor = (rank + file) % 2 === 0 ? 'light' : 'dark';
+      const div = document.createElement('div');
+      div.className = `square ${squareColor}`;
+      const piece = board[rank][file];
+      if (piece) div.textContent = pieceIcons[piece.type === piece.type.toLowerCase() ? piece.type : piece.type.toUpperCase()];
+      div.dataset.square = 'abcdefgh'[file] + (rank + 1);
+      div.addEventListener('click', () => onSquareClick(div.dataset.square));
+      boardDiv.appendChild(div);
     }
   }
+}
 
-  function generateExtraMovesForPiece(square){ const p = pieceAt(square); if(!p || p.color!=='w') return []; const res = []; const type = p.type; if(upgradesByType[type] && upgradesByType[type].includes('KnightLeap')){ const [f,r] = coordsFromSquare(square); const deltas = [[1,2],[2,1],[2,-1],[1,-2],[-1,-2],[-2,-1],[-2,1],[-1,2]]; for(const [df,dr] of deltas){ const nf=f+df, nr=r+dr; if(nf>=0&&nf<8&&nr>=0&&nr<8){ const s = squareFromCoords(nf,nr); const occ = pieceAt(s); if(!occ || occ.color!=='w') res.push(s); } } }
-    if(perPieceCharges[square] && perPieceCharges[square].has('Teleport')){ for(let r=0;r<8;r++) for(let f=0;f<8;f++){ const s = squareFromCoords(f,r); if(!pieceAt(s)) res.push(s); } }
-    return Array.from(new Set(res)); }
+function onSquareClick(square) {
+  if (!selectedSquare) {
+    const moves = game.moves({ square, verbose: true });
+    if (moves.length) {
+      selectedSquare = square;
+      highlightMoves(moves);
+    }
+  } else {
+    const move = game.move({ from: selectedSquare, to: square, promotion: 'q' });
+    clearHighlights();
+    selectedSquare = null;
+    if (move) {
+      handleCapture(move);
+      renderBoard();
+      if (!game.game_over()) setTimeout(aiMove, 200);
+    }
+  }
+}
 
-  // AI — simple negamax
-  function aiMove(){ const depth = Math.max(1, parseInt(aiDepthEl.value)||3); log('AI thinking...'); const start = performance.now(); const best = negamaxRoot(depth); const dt = Math.round(performance.now()-start); if(best && best.move){ game.move(best.move); renderBoard(); updateStatus(); log(`AI plays ${best.move.from}${best.move.to} (eval ${Math.round(best.score)}) in ${dt}ms`); } else { const m = game.moves({verbose:true})[0]; if(m) { game.move(m); renderBoard(); updateStatus(); log('AI played a move (fallback).'); } } }
+function highlightMoves(moves) {
+  clearHighlights();
+  moves.forEach(m => {
+    const sq = document.querySelector(`[data-square='${m.to}']`);
+    if (sq) sq.classList.add('highlight');
+  });
+}
 
-  function negamaxRoot(depth){ const moves = game.moves({verbose:true}); let bestScore = -9999999; let bestMove = null; for(const m of moves){ game.move({from:m.from,to:m.to,promotion:m.promotion||'q'}); const score = -negamax(depth-1, -9999999, 9999999); game.undo(); if(score > bestScore){ bestScore = score; bestMove = m; } } return {move: bestMove, score: bestScore}; }
-  function negamax(depth, alpha, beta){ if(depth===0 || (game.game_over && game.game_over())) return evaluate(); let max = -9999999; let moves = game.moves({verbose:true}); // simple ordering: captures first
-    moves.sort((a,b)=> (b.captured?1:0) - (a.captured?1:0)); for(const m of moves){ game.move({from:m.from,to:m.to,promotion:m.promotion||'q'}); const val = -negamax(depth-1, -beta, -alpha); game.undo(); if(val>max) max=val; if(max>alpha) alpha=max; if(alpha>=beta) break; } return max; }
+function clearHighlights() {
+  document.querySelectorAll('.highlight').forEach(sq => sq.classList.remove('highlight'));
+}
 
-  function evaluate(){ const pieceValues = { p:100, n:320, b:330, r:500, q:900, k:20000 }; let score = 0; const b = game.board(); for(let r=0;r<8;r++) for(let f=0;f<8;f++){ const p = b[r][f]; if(!p) continue; const val = pieceValues[p.type]; const sign = p.color==='w'?1:-1; score += sign * val; if(p.color==='w' && fortifyBonus[p.type]) score += fortifyBonus[p.type]; } const mobility = game.moves().length; if(game.turn && game.turn()==='w') score += mobility*4; else score -= mobility*4; return score; }
+function aiMove() {
+  const moves = game.moves();
+  if (!moves.length) return;
+  const move = moves[Math.floor(Math.random() * moves.length)];
+  game.move(move);
+  renderBoard();
+}
 
-  // helpers for piece manipulation (works with chess.js and fallback)
-  function putPieceAt(square, piece){ if(ChessLib){ try{ game.put(piece, square); }catch(e){ /*ignore*/ } } else { if(typeof game.put === 'function'){ game.put(piece, square); } } renderBoard(); }
+function handleCapture(move) {
+  if (move.captured) {
+    const capturer = move.piece.toUpperCase();
+    applyUpgrade(capturer);
+  }
+}
 
-  // small utilities
-  function rndChoice(arr){ return arr[Math.floor(Math.random()*arr.length)]; }
-  function log(txt){ const d = document.createElement('div'); d.textContent = txt; logEl.prepend(d); }
-  function updateStatus(){ if(game.in_checkmate && game.in_checkmate()){ statusEl.textContent = game.turn()==='w' ? 'Checkmate. Black wins.' : 'Checkmate. White wins.'; } else if(game.in_draw && game.in_draw && game.in_draw()){ statusEl.textContent = 'Draw.'; } else statusEl.textContent = (game.turn && game.turn()==='w' ? 'White to move — your turn' : 'Black to move — AI thinking'); }
-  function renderUpgrades(){ upgradesEl.innerHTML=''; for(const t of ['p','n','b','r','q','k']){ if(upgradesByType[t].length){ const b = document.createElement('div'); b.className='upgrade-badge'; b.textContent = `${t.toUpperCase()}: ${upgradesByType[t].join(', ')}`; upgradesEl.appendChild(b); } } }
-  function listExtras(){ for(const r=0;r<8;r++) for(let f=0;f<8;f++){ const s = squareFromCoords(f,r); const p = pieceAt(s); if(p && p.color==='w'){ const extras = generateExtraMovesForPiece(s); if(extras.length) log(`${s}: ${extras.join(', ')}`); } } }
+function applyUpgrade(pieceType) {
+  log(`Upgrade acquired for ${pieceType}: special ability unlocked.`);
+  // Example: store upgrade type for piece in upgrades object
+  upgrades[pieceType] = "special";
+}
 
-  // Minimal fallback implementation (only used if chess.js is not loaded). This is intentionally small but provides enough
-  // functionality for the UI to be usable.
-  function MiniChess(){ this._board = [ [{type:'r',color:'b'},{type:'n',color:'b'},{type:'b',color:'b'},{type:'q',color:'b'},{type:'k',color:'b'},{type:'b',color:'b'},{type:'n',color:'b'},{type:'r',color:'b'}], Array(8).fill().map(()=>({type:'p',color:'b'})), Array(8).fill(null), Array(8).fill(null), Array(8).fill(null), Array(8).fill(null), Array(8).fill().map(()=>({type:'p',color:'w'})), [{type:'r',color:'w'},{type:'n',color:'w'},{type:'b',color:'w'},{type:'q',color:'w'},{type:'k',color:'w'},{type:'b',color:'w'},{type:'n',color:'w'},{type:'r',color:'w'}] ]; this._turn='w'; this._history=[]; }
-  MiniChess.prototype.board = function(){ return this._board.map(r=>r.map(c=>c?{type:c.type,color:c.color}:null)); };
-  MiniChess.prototype.turn = function(){ return this._turn; };
-  MiniChess.prototype.moves = function(opts){ const res=[]; for(let r=0;r<8;r++) for(let f=0;f<8;f++){ const p = this._board[r][f]; if(!p) continue; const sq = squareFromCoords(f,r); if(opts && opts.square && opts.square!==sq) continue; if(p.color!==this._turn) continue; const targets = generatePseudoTargets(this,f,r,p.type,p.color); for(const t of targets){ if(opts && opts.verbose) res.push({from:sq,to:t,captured:(this._board[coordsFromSquare(t)[1]][coordsFromSquare(t)[0]]?this._board[coordsFromSquare(t)[1]][coordsFromSquare(t)[0]].type:null)}); else res.push(sq+t); } } return res; };
-  MiniChess.prototype.move = function(obj){ const from = obj.from; const to = obj.to; const [ff,fr] = coordsFromSquare(from); const [tf,tr] = coordsFromSquare(to); const piece = this._board[fr][ff]; if(!piece) return null; const cap = this._board[tr][tf]; this._history.push({from:from,to:to,piece:JSON.parse(JSON.stringify(piece)),cap:cap?JSON.parse(JSON.stringify(cap)):null}); this._board[tr][tf] = {type: obj.promotion?obj.promotion:piece.type, color: piece.color}; this._board[fr][ff]=null; this._turn = this._turn==='w'?'b':'w'; return {from:from,to:to}; };
-  MiniChess.prototype.undo = function(){ const h=this._history.pop(); if(!h) return null; const [ff,fr] = coordsFromSquare(h.from); const [tf,tr] = coordsFromSquare(h.to); this._board[fr][ff] = h.piece; this._board[tr][tf] = h.cap; this._turn = this._turn==='w'?'b':'w'; return h; };
-  MiniChess.prototype.game_over = function(){ return false; };
-  MiniChess.prototype.in_checkmate = function(){ return false; };
-  MiniChess.prototype.in_draw = function(){ return false; };
-  MiniChess.prototype.put = function(piece,sq){ const [f,r]=coordsFromSquare(sq); this._board[r][f] = {type:piece.type,color:piece.color}; };
-  MiniChess.prototype.remove = function(sq){ const [f,r]=coordsFromSquare(sq); this._board[r][f] = null; };
-
-  function generatePseudoTargets(state,f,r,type,color){ const res=[]; if(type==='p'){ const dir = color==='w'?-1:1; const nr=r+dir; if(nr>=0&&nr<8 && !state._board[nr][f]) res.push(squareFromCoords(f,nr)); // captures
-      const capR = r+dir; for(const df of [-1,1]){ const cf=f+df; if(cf>=0&&cf<8 && capR>=0&&capR<8){ const occ = state._board[capR][cf]; if(occ && occ.color!==color) res.push(squareFromCoords(cf,capR)); } }
-    } else if(type==='n'){ const deltas=[[1,2],[2,1],[2,-1],[1,-2],[-1,-2],[-2,-1],[-2,1],[-1,2]]; for(const [df,dr] of deltas){ const nf=f+df,nr=r+dr; if(nf>=0&&nf<8&&nr>=0&&nr<8){ const occ=state._board[nr][nf]; if(!occ||occ.color!==color) res.push(squareFromCoords(nf,nr)); } } } else { const dirs = type==='b'?[[1,1],[1,-1],[-1,1],[-1,-1]]: type==='r'?[[1,0],[-1,0],[0,1],[0,-1]]:[[1,1],[1,-1],[-1,1],[-1,-1],[1,0],[-1,0],[0,1],[0,-1]]; for(const [df,dr] of dirs){ let nf=f+df,nr=r+dr; while(nf>=0&&nf<8&&nr>=0&&nr<8){ const occ = state._board[nr][nf]; if(!occ) res.push(squareFromCoords(nf,nr)); else { if(occ.color!==color) res.push(squareFromCoords(nf,nr)); break; } nf+=df; nr+=dr; } } } return res; }
-
-  // start
-  init();
-
-})();
+renderBoard();
 </script>
 </body>
 </html>
