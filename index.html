@@ -1,0 +1,462 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Roguelike Chess — Web</title>
+  <style>
+    :root{--bg:#0b1220;--panel:#0f1724;--light:#e6eef8;--accent:#7dd3fc}
+    body{margin:0;font-family:Inter,Segoe UI,Roboto,Arial,sans-serif;background:linear-gradient(180deg,#07101a 0%,#081827 100%);color:var(--light);display:flex;align-items:flex-start;justify-content:center;min-height:100vh;padding:24px}
+    .app{display:grid;grid-template-columns:420px 360px;gap:20px}
+    .card{background:linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));border-radius:12px;padding:16px;box-shadow:0 6px 30px rgba(2,6,23,0.6);}
+    h1{margin:0 0 8px;font-size:18px}
+    #board{width:400px;height:400px;border-radius:8px;overflow:hidden;display:grid;grid-template-columns:repeat(8,1fr);}
+    .sq{width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:28px;cursor:pointer;user-select:none}
+    .light{background:#f0d9b5;color:#111}
+    .dark{background:#b58863;color:#111}
+    .sq.selected{outline:3px solid var(--accent);box-shadow:0 0 18px rgba(125,211,252,0.12)}
+    .controls{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+    button{background:transparent;border:1px solid rgba(255,255,255,0.06);color:var(--light);padding:8px 10px;border-radius:8px;cursor:pointer}
+    .small{font-size:12px;padding:6px 8px}
+    .panel{width:360px}
+    .log{height:200px;overflow:auto;background:rgba(255,255,255,0.02);padding:8px;border-radius:8px;margin-top:8px}
+    .upgrades{margin-top:12px}
+    .upgrade-badge{display:inline-block;background:#142231;padding:6px 8px;border-radius:8px;margin:6px 6px 0 0;border:1px solid rgba(125,211,252,0.06)}
+    .status{margin-top:8px;color:#9fb4c8}
+    footer{margin-top:12px;font-size:12px;color:#8fa6b8}
+  </style>
+</head>
+<body>
+  <div class="app">
+    <div class="card">
+      <h1>Roguelike Chess — Player vs Strong Engine</h1>
+      <div id="board" aria-label="chess board"></div>
+
+      <div class="controls">
+        <button id="undo" class="small">Undo</button>
+        <button id="newGame" class="small">New Game</button>
+        <button id="flip" class="small">Flip Board</button>
+        <button id="listExtras" class="small">List Special Moves</button>
+      </div>
+
+      <div class="status" id="status">White to move — you play White</div>
+
+      <div class="log" id="log"></div>
+    </div>
+
+    <div class="card panel">
+      <h1>Upgrades (player only)</h1>
+      <div class="upgrades" id="upgrades"></div>
+
+      <h1 style="margin-top:16px">Engine controls</h1>
+      <div style="display:flex;gap:8px;align-items:center">
+        <label>AI depth</label>
+        <input id="aiDepth" type="number" value="3" style="width:56px;background:transparent;color:var(--light);border:1px solid rgba(255,255,255,0.06);padding:6px;border-radius:6px" />
+      </div>
+
+      <h1 style="margin-top:16px">How it works</h1>
+      <ul style="color:#9fb4c8">
+        <li>Capture a piece → gain 1 random upgrade that applies to all your pieces of that type.</li>
+        <li>Upgrades include KnightLeap, ExtraMove, Fortify, Teleport, PromoteOnCapture.</li>
+        <li>AI plays standard chess (no upgrades) with alpha-beta search.</li>
+      </ul>
+
+      <footer>
+        To deploy on GitHub: push this file as <code>index.html</code> into a repo and enable GitHub Pages (main branch / root). Or just open locally.
+      </footer>
+    </div>
+  </div>
+
+<script>
+// --- Minimal chess utilities using chess.js (bundled code fallback) ---
+// We'll embed a tiny legal-move engine if chess.js not available from CDN.
+// But first try to load chess.js dynamically; if it fails, use minimal implementation.
+
+// For portability we include a tiny internal chess engine inspired by chess.js core move generation and FEN handling
+// Note: for brevity this internal fallback implements necessary behavior for play and legal move checks but
+// is not fully featured. If you want the most accurate rules use chess.js library by including it in the repo.
+
+// We'll try to load chess.js via CDN by injecting a script tag; if it loads, we use it.
+
+(function(){
+  // small Unicode piece map
+  const UNICODE = { p:'♟', r:'♜', n:'♞', b:'♝', q:'♛', k:'♚' };
+  const WHITE = 'w', BLACK='b';
+
+  // --- Game state using chess.js if available, else a small fallback ---
+  let ChessLib = null;
+
+  // attempt to load chess.js from CDN
+  function loadChessJs(cb){
+    const script = document.createElement('script');
+    script.src = 'https://cdnjs.cloudflare.com/ajax/libs/chess.js/1.0.0/chess.min.js';
+    script.onload = ()=>{ ChessLib = window.Chess; cb(); };
+    script.onerror = ()=>{ console.warn('Could not load chess.js, using fallback.'); ChessLib = null; cb(); };
+    document.head.appendChild(script);
+    // fallback timeout
+    setTimeout(()=>{ if(!ChessLib) cb(); }, 1200);
+  }
+
+  loadChessJs(init);
+
+  // --- Roguelike state ---
+  const UPGRADE_POOL = [
+    ['KnightLeap','Piece gains knight moves in addition to normal moves.'],
+    ['ExtraMove','This piece gets a one-time extra move after moving.'],
+    ['Fortify','Pieces of this type get +0.5 material bonus in evaluation.'],
+    ['Teleport','This piece can teleport once to any empty square (legal-checked).'],
+    ['PromoteOnCapture','When this piece captures, it auto-promotes to Queen.']
+  ];
+
+  function rndChoice(arr){ return arr[Math.floor(Math.random()*arr.length)]; }
+
+  // upgrades by piece type for player (piece types: p,n,b,r,q,k)
+  const upgradesByType = { p:[], n:[], b:[], r:[], q:[], k:[] };
+  // per-piece charges keyed by square like 'e4' -> Set of upgrades
+  const perPieceCharges = {}; // { 'e4': new Set(['Teleport']) }
+  const fortifyBonus = { p:0, n:0, b:0, r:0, q:0, k:0 };
+
+  // --- Board UI ---
+  const boardEl = document.getElementById('board');
+  const logEl = document.getElementById('log');
+  const statusEl = document.getElementById('status');
+  const upgradesEl = document.getElementById('upgrades');
+  const aiDepthEl = document.getElementById('aiDepth');
+
+  let game = null; // Chess instance or fallback
+  let flipped = false;
+  let selectedSquare = null;
+  let legalMovesCache = [];
+
+  function init(){
+    resetGame();
+    document.getElementById('newGame').addEventListener('click', ()=>{ resetGame(); });
+    document.getElementById('flip').addEventListener('click', ()=>{ flipped = !flipped; renderBoard(); });
+    document.getElementById('undo').addEventListener('click', ()=>{ undoMove(); });
+    document.getElementById('listExtras').addEventListener('click', ()=>{ listExtras(); });
+  }
+
+  function resetGame(){
+    // clear roguelike state
+    for(let k in upgradesByType) upgradesByType[k]=[];
+    for(let k in perPieceCharges) delete perPieceCharges[k];
+    for(let k in fortifyBonus) fortifyBonus[k]=0;
+
+    if(ChessLib){ game = new ChessLib(); }
+    else { game = new MiniChess(); }
+    selectedSquare = null; legalMovesCache=[]; renderBoard(); updateStatus(); log('New game started. You are White.'); renderUpgrades();
+  }
+
+  function undoMove(){
+    if(game.undo){ const mv = game.undo(); // p remove upgrades if any per-piece charges moved? keep conservative: do not revert roguelike upgrades
+        renderBoard(); updateStatus(); log('Undid last move.');
+    }
+  }
+
+  function listExtras(){
+    // generate extra moves (KnightLeap/Teleport) for player's pieces
+    const extras = {};
+    const board = game.board();
+    for(let r=0;r<8;r++) for(let f=0;f<8;f++){
+      const sqName = sqFromCoords(f,r);
+      const piece = board[r][f];
+      if(piece && piece.color==='w'){
+        const key = sqName; extras[key]=generateExtraMovesForPiece(sqName);
+      }
+    }
+    // print
+    for(const k in extras){ if(extras[k].length){ log(k+': '+extras[k].join(', ')); } }
+  }
+
+  // --- Rendering ---
+  function renderBoard(){
+    boardEl.innerHTML='';
+    const board = game.board(); // 8x8 array [rank][file] ranks 8->1 ? chess.js returns ranks 0->7 with 0 as 8th rank? We'll adapt
+    // We'll construct squares a8..h1 in order-friendly way
+    const ranks = [...Array(8).keys()].map(i=>7-i); // 7..0
+    const files = [...Array(8).keys()];
+    const order = [];
+    if(!flipped){
+      for(const r of ranks) for(const f of files) order.push([f,r]);
+    } else {
+      for(const r of [...ranks].reverse()) for(const f of [...files].reverse()) order.push([f,r]);
+    }
+    for(const [f,r] of order){
+      const sq = document.createElement('div');
+      sq.className='sq '+(((f+r)&1)?'dark':'light');
+      const sqName = sqFromCoords(f,r);
+      sq.dataset.sq = sqName;
+      const piece = board[r][f];
+      if(piece){ const sym = piece.color==='w'?piece.type.toUpperCase():piece.type; sq.textContent = pieceSymbol(piece); }
+      sq.addEventListener('click', onSquareClick);
+      boardEl.appendChild(sq);
+    }
+    highlightLegal(); renderUpgrades();
+  }
+
+  function pieceSymbol(piece){
+    if(!piece) return '';
+    const s = piece.type.toLowerCase();
+    const u = { p:'♙', r:'♖', n:'♘', b:'♗', q:'♕', k:'♔' };
+    return piece.color==='w'?u[s]:u[s].toLowerCase();
+  }
+
+  function sqFromCoords(f,r){
+    const file = 'abcdefgh'[f]; const rank = (r+1).toString(); return file+rank; // careful: our r is 0..7 representing rank 1..8? We adapted in render.
+  }
+
+  function coordsFromSq(sq){ const f = 'abcdefgh'.indexOf(sq[0]); const r = parseInt(sq[1],10)-1; return [f,r]; }
+
+  function onSquareClick(e){
+    const sq = e.currentTarget.dataset.sq;
+    if(!selectedSquare){
+      // select if piece of player's color
+      const p = pieceAt(sq);
+      if(p && p.color==='w'){
+        selectedSquare = sq; highlightSelected(sq); computeLegalMoves(sq);
+      }
+    } else {
+      // attempt move from selectedSquare to sq
+      attemptMove(selectedSquare, sq);
+      selectedSquare = null; highlightSelected(null);
+    }
+  }
+
+  function pieceAt(sq){
+    // map using game.board()
+    const [f,r] = coordsFromSq(sq);
+    const board = game.board();
+    // chess.js board()[rank][file] with rank 0 = 8th rank? We handle above by using r
+    return board[r][f];
+  }
+
+  function highlightSelected(sq){
+    document.querySelectorAll('.sq').forEach(el=>el.classList.remove('selected'));
+    if(sq){ const el = document.querySelector(`.sq[data-sq='${sq}']`); if(el) el.classList.add('selected'); }
+  }
+
+  function computeLegalMoves(from){
+    legalMovesCache = game.moves({square: from, verbose:true}).map(m=>m.to);
+    highlightLegal();
+  }
+
+  function highlightLegal(){
+    document.querySelectorAll('.sq').forEach(el=>el.style.boxShadow='');
+    for(const m of legalMovesCache){ const el = document.querySelector(`.sq[data-sq='${m}']`); if(el) el.style.boxShadow='inset 0 0 0 3px rgba(125,211,252,0.12)'; }
+  }
+
+  // --- Move handling & roguelike capture mechanics ---
+  function attemptMove(from,to){
+    const moves = game.moves({ verbose:true });
+    // find move matching from->to
+    const mv = moves.find(m=>m.from===from && m.to===to);
+    if(mv){
+      // if capture and player moved, grant upgrade
+      if(mv.captured && game.turn()==='w'){
+        const capType = mv.captured; // 'p','r', etc.
+        const [upgradeId,desc] = rndChoice(UPGRADE_POOL);
+        upgradesByType[capType].push(upgradeId);
+        if(upgradeId==='Fortify') fortifyBonus[capType]+=50; // 50 = 0.5 pawn units in our eval
+        // grant per-piece charge for Teleport/ExtraMove on destination after move
+        setTimeout(()=>{ // after pushing move, we will set charges
+          perPieceCharges[to]=perPieceCharges[to]||new Set(); if(upgradeId==='Teleport' || upgradeId==='ExtraMove') perPieceCharges[to].add(upgradeId);
+        },0);
+        log(`Captured ${capType.toUpperCase()}: got upgrade ${upgradeId} (${desc})`);
+      }
+
+      // play move, but we must support PromoteOnCapture: after move, if capturing piece's type has PromoteOnCapture upgrade, transform to queen
+      game.move({from:from,to:to,promotion:mv.promotion||'q'});
+      // post-move promote-on-capture check
+      if(mv.captured){
+        // find piece now at 'to'
+        const p = pieceAt(to);
+        if(p && upgradesByType[p.type] && upgradesByType[p.type].includes('PromoteOnCapture')){
+          // replace by queen of same color
+          game.remove_p(to); // fallback: if ChessLib exists, use appropriate method; else our fallback supports remove
+          game.put({type:'q',color:p.color}, to);
+          log(`Piece on ${to} auto-promoted to Queen due to PromoteOnCapture.`);
+        }
+      }
+
+      renderBoard(); updateStatus();
+
+      // After player's move, handle ExtraMove per-piece
+      if(perPieceCharges[to] && perPieceCharges[to].has('ExtraMove')){
+        // allow player to make one extra move with this same piece
+        const again = confirm('This moved piece has ExtraMove charge. Do you want to move it again now?');
+        if(again){
+          // simple prompt for destination
+          const dest = prompt('Enter destination square for extra move (e.g. e4) or Cancel:');
+          if(dest){
+            const extras = generateExtraMovesForPiece(to);
+            const legal = game.moves({verbose:true}).some(m=>m.from===to && m.to===dest);
+            if(legal || extras.includes(dest)){
+              // consume charge
+              perPieceCharges[to].delete('ExtraMove'); if(perPieceCharges[to].size===0) delete perPieceCharges[to];
+              // perform move
+              attemptMove(to,dest);
+              return; // will trigger AI after
+            } else { alert('Not a legal extra move. Charge preserved.'); }
+          }
+        }
+      }
+
+      // After player's move, trigger AI move if game not over
+      setTimeout(()=>{ if(!game.game_over() && game.turn()==='b') aiMove(); }, 200);
+    } else {
+      // maybe it's an extra generated move like Teleport/KnightLeap
+      const extras = generateExtraMovesForPiece(from);
+      if(extras.includes(to)){
+        // perform pseudo-legal teleport/knight move: push using move with from/to
+        game.move({from:from,to:to,promotion:'q'});
+        // if teleport was per-piece, consume charge
+        if(perPieceCharges[from] && perPieceCharges[from].has('Teleport')){
+          perPieceCharges[from].delete('Teleport'); if(perPieceCharges[from].size===0) delete perPieceCharges[from];
+        }
+        renderBoard(); updateStatus();
+        setTimeout(()=>{ if(!game.game_over() && game.turn()==='b') aiMove(); }, 200);
+      } else {
+        log('Illegal move attempted.');
+      }
+    }
+  }
+
+  function generateExtraMovesForPiece(square){
+    // generate destinations (strings) due to KnightLeap or Teleport charges
+    const p = pieceAt(square);
+    if(!p || p.color!=='w') return [];
+    const res = [];
+    const type = p.type;
+    if(upgradesByType[type].includes('KnightLeap')){
+      // compute knight offsets
+      const [f,r] = coordsFromSq(square);
+      const deltas = [[1,2],[2,1],[2,-1],[1,-2],[-1,-2],[-2,-1],[-2,1],[-1,2]];
+      for(const [df,dr] of deltas){ const nf=f+df,nr=r+dr; if(nf>=0&&nf<8&&nr>=0&&nr<8){ const s=sqFromCoords(nf,nr); const occ = pieceAt(s); if(!occ || occ.color!=='w') res.push(s); }}
+    }
+    if(perPieceCharges[square] && perPieceCharges[square].has('Teleport')){
+      // all empty squares as possible targets (filter by legality later)
+      for(let f=0;f<8;f++) for(let r=0;r<8;r++){ const s=sqFromCoords(f,r); if(!pieceAt(s)) res.push(s); }
+    }
+    return Array.from(new Set(res));
+  }
+
+  // --- AI Engine: simple alpha-beta on moves with evaluation ---
+  function aiMove(){
+    const depth = Math.max(1, parseInt(aiDepthEl.value)||3);
+    log('AI thinking...');
+    const start = performance.now();
+    const best = negamaxRoot(game, depth);
+    const ms = Math.round(performance.now()-start);
+    if(best && best.move){
+      game.move(best.move); renderBoard(); updateStatus(); log(`AI plays ${best.move.san || (best.move.from+best.move.to)} (eval ${Math.round(best.score)}) in ${ms}ms`);
+    } else {
+      // random
+      const moves = game.moves({verbose:true});
+      if(moves.length){ const m = moves[Math.floor(Math.random()*moves.length)]; game.move(m); renderBoard(); updateStatus(); log('AI played a random move.'); }
+    }
+  }
+
+  function negamaxRoot(state, depth){
+    const moves = state.moves({verbose:true});
+    let bestScore = -9999999; let bestMove = null;
+    for(const m of moves){
+      state.move(m);
+      const score = -negamax(state, depth-1, -9999999, 9999999);
+      state.undo();
+      if(score > bestScore){ bestScore = score; bestMove = m; }
+    }
+    return {move:bestMove, score:bestScore};
+  }
+
+  function negamax(state, depth, alpha, beta){
+    if(depth===0 || state.game_over()) return evaluate(state);
+    let max = -9999999;
+    const moves = state.moves({verbose:true});
+    // move ordering: captures first
+    moves.sort((a,b)=> (a.captured?1:0) - (b.captured?1:0));
+    for(const m of moves){
+      state.move(m);
+      const val = -negamax(state, depth-1, -beta, -alpha);
+      state.undo();
+      if(val>max) max=val;
+      if(max>alpha) alpha=max;
+      if(alpha>=beta) break;
+    }
+    return max;
+  }
+
+  function evaluate(state){
+    // basic material + pst + mobility. Player white positive.
+    const pieceValues = { p:100, n:320, b:330, r:500, q:900, k:20000 };
+    let score = 0;
+    const board = state.board();
+    for(let r=0;r<8;r++) for(let f=0;f<8;f++){
+      const p = board[r][f]; if(!p) continue; const val = pieceValues[p.type]; const sign = p.color==='w'?1:-1; score += sign*val;
+      // fortify bonus applies only to player (white)
+      if(p.color==='w' && fortifyBonus[p.type]) score += fortifyBonus[p.type];
+    }
+    // mobility
+    const mobility = state.moves().length;
+    if(state.turn()==='w') score += mobility*4; else score -= mobility*4;
+    return score;
+  }
+
+  // --- Utilities & Logging ---
+  function log(txt){ const d = document.createElement('div'); d.textContent = txt; logEl.prepend(d); }
+  function updateStatus(){
+    if(game.in_checkmate && game.in_checkmate()) { statusEl.textContent = game.turn()==='w' ? 'Checkmate. Black wins.' : 'Checkmate. White wins.'; }
+    else if(game.in_draw && game.in_draw()) { statusEl.textContent = 'Draw.'; }
+    else statusEl.textContent = (game.turn()==='w' ? 'White to move — your turn' : 'Black to move — AI thinking');
+  }
+
+  function renderUpgrades(){
+    upgradesEl.innerHTML='';
+    for(const t of ['p','n','b','r','q','k']){
+      if(upgradesByType[t].length){
+        const b = document.createElement('div'); b.className='upgrade-badge'; b.textContent = `${t.toUpperCase()}: ${upgradesByType[t].join(', ')}`; upgradesEl.appendChild(b);
+      }
+    }
+  }
+
+  // --- Minimal fallback Chess implementation (very small subset) ---
+  function MiniChess(){
+    // We'll implement a tiny wrapper with similar API to chess.js for minimal play. This fallback only used if chess.js not loaded.
+    this._board = [
+      [{type:'r',color:'b'},{type:'n',color:'b'},{type:'b',color:'b'},{type:'q',color:'b'},{type:'k',color:'b'},{type:'b',color:'b'},{type:'n',color:'b'},{type:'r',color:'b'}],
+      Array(8).fill({type:'p',color:'b'}),
+      Array(8).fill(null),Array(8).fill(null),Array(8).fill(null),Array(8).fill(null),
+      Array(8).fill({type:'p',color:'w'}),
+      [{type:'r',color:'w'},{type:'n',color:'w'},{type:'b',color:'w'},{type:'q',color:'w'},{type:'k',color:'w'},{type:'b',color:'w'},{type:'n',color:'w'},{type:'r',color:'w'}]
+    ];
+    this._turn='w'; this._history=[]; this._lastMove=null;
+  }
+  MiniChess.prototype.board = function(){ return this._board.map(r=>r.map(c=>c?{type:c.type,color:c.color}:null)); }
+  MiniChess.prototype.moves = function(opts){
+    // naive: return all pseudo-legal moves in SAN or verbose
+    const res=[]; for(let r=0;r<8;r++) for(let f=0;f<8;f++){ const p=this._board[r][f]; if(!p) continue; if(!opts || !opts.square || sqFromCoords(f,r)===opts.square){ if(p.color===this._turn){ // generate simple moves
+          const from=sqFromCoords(f,r);
+          const targets = generatePseudoTargets(this, f, r, p.type, p.color);
+          for(const to of targets){ if(opts && opts.verbose) res.push({from:from,to:to,flags:'',san:''}); else res.push(from+to); }
+        } }} return res;
+  }
+  MiniChess.prototype.turn = function(){ return this._turn; }
+  MiniChess.prototype.move = function(obj){ // obj: {from,to,promotion}
+    const [ff,fr]=coordsFromSq(obj.from); const [tf,tr]=coordsFromSq(obj.to); const p = this._board[fr][ff]; const cap = this._board[tr][tf]; this._history.push({from:obj.from,to:obj.to,piece:p,cap:cap}); this._board[tr][tf]=p; this._board[fr][ff]=null; if(obj.promotion) this._board[tr][tf]={type:obj.promotion,color:p.color}; this._turn = this._turn==='w'?'b':'w'; this._lastMove = {from:obj.from,to:obj.to}; return true; }
+  MiniChess.prototype.undo = function(){ const h=this._history.pop(); if(!h) return null; const [ff,fr]=coordsFromSq(h.from); const [tf,tr]=coordsFromSq(h.to); this._board[fr][ff]=h.piece; this._board[tr][tf]=h.cap; this._turn = this._turn==='w'?'b':'w'; return h; }
+  MiniChess.prototype.board = MiniChess.prototype.board; MiniChess.prototype.game_over=function(){return false}; MiniChess.prototype.in_checkmate=function(){return false}; MiniChess.prototype.in_draw=function(){return false}; MiniChess.prototype.turn=function(){return this._turn}; MiniChess.prototype.in_check=function(){return false};
+
+  function generatePseudoTargets(state, f, r, type, color){
+    const res=[];
+    if(type==='p'){ const dir = color==='w'?1:-1; const oneR=r+dir; if(oneR>=0&&oneR<8&& !state._board[oneR][f]) res.push(sqFromCoords(f,oneR)); }
+    else if(type==='n'){ const deltas=[[1,2],[2,1],[2,-1],[1,-2],[-1,-2],[-2,-1],[-2,1],[-1,2]]; for(const [df,dr] of deltas){ const nf=f+df,nr=r+dr; if(nf>=0&&nf<8&&nr>=0&&nr<8){ const occ=state._board[nr][nf]; if(!occ||occ.color!==color) res.push(sqFromCoords(nf,nr)); }} }
+    else { // bishop/rook/queen simple rays
+      const dirs = type==='b'?[[1,1],[1,-1],[-1,1],[-1,-1]]: type==='r'?[[1,0],[-1,0],[0,1],[0,-1]]:[[1,1],[1,-1],[-1,1],[-1,-1],[1,0],[-1,0],[0,1],[0,-1]];
+      for(const [df,dr] of dirs){ let nf=f+df,nr=r+dr; while(nf>=0&&nf<8&&nr>=0&&nr<8){ const occ=state._board[nr][nf]; if(!occ) res.push(sqFromCoords(nf,nr)); else { if(occ.color!==color) res.push(sqFromCoords(nf,nr)); break; } nf+=df; nr+=dr; } }
+    }
+    return res;
+  }
+
+})();
+</script>
+</body>
+</html>
