@@ -7,8 +7,8 @@
   body { background: #222; color: white; font-family: sans-serif; text-align: center; }
   #board { display: grid; grid-template-columns: repeat(8, 60px); grid-template-rows: repeat(8, 60px); margin: 20px auto; }
   .square { width: 60px; height: 60px; display: flex; align-items: center; justify-content: center; font-size: 40px; }
-  .light { background: #eee; }
-  .dark { background: #555; }
+  .light { background: #eee; color: black; }
+  .dark { background: #555; color: white; }
   .selected { outline: 3px solid yellow; }
 </style>
 </head>
@@ -32,12 +32,15 @@ function renderBoard() {
       squareDiv.className = `square ${squareColor}`;
       const piece = board[r][c];
       if (piece) {
-        squareDiv.textContent = piece.type.toUpperCase() === 'P' ? (piece.color === 'w' ? '♙' : '♟') :
-                                 piece.type === 'r' ? (piece.color === 'w' ? '♖' : '♜') :
-                                 piece.type === 'n' ? (piece.color === 'w' ? '♘' : '♞') :
-                                 piece.type === 'b' ? (piece.color === 'w' ? '♗' : '♝') :
-                                 piece.type === 'q' ? (piece.color === 'w' ? '♕' : '♛') :
-                                 piece.color === 'w' ? '♔' : '♚';
+        const symbolMap = {
+          'p': piece.color === 'w' ? '♙' : '♟',
+          'r': piece.color === 'w' ? '♖' : '♜',
+          'n': piece.color === 'w' ? '♘' : '♞',
+          'b': piece.color === 'w' ? '♗' : '♝',
+          'q': piece.color === 'w' ? '♕' : '♛',
+          'k': piece.color === 'w' ? '♔' : '♚'
+        };
+        squareDiv.textContent = symbolMap[piece.type];
       }
       const file = 'abcdefgh'[c];
       const rank = (r+1).toString();
@@ -58,12 +61,10 @@ function onSquareClick(square) {
       renderBoard();
     }
   } else {
-    const move = game.move({ from: selectedSquare, to: square });
+    const move = game.move({ from: selectedSquare, to: square, promotion: 'q' });
     selectedSquare = null;
     renderBoard();
-    if (move) {
-      aiMove();
-    }
+    if (move) aiMove();
   }
 }
 
@@ -73,11 +74,11 @@ function aiMove() {
     const moves = game.moves();
     if (moves.length > 0) {
       const move = moves[Math.floor(Math.random() * moves.length)];
-      game.move(move);
+      game.move(move, { promotion: 'q' });
     }
     aiThinking = false;
     renderBoard();
-  }, 500);
+  }, 300);
 }
 
 renderBoard();
